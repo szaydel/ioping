@@ -280,7 +280,7 @@ int fdatasync(int fd)
 void usage(void)
 {
 	fprintf(stderr,
-			" Usage: ioping [-ABCDRLWkq] [-c count] [-i interval] [-s size] [-S wsize]\n"
+			" Usage: ioping [-ABCDRLTWkq] [-c count] [-i interval] [-s size] [-S wsize]\n"
 			"               [-o offset] [-w deadline] [-pP period] directory|file|device\n"
 			"        ioping -h | -v\n"
 			"\n"
@@ -300,6 +300,7 @@ void usage(void)
 			"      -R              seek rate test\n"
 			"      -L              use sequential operations\n"
 			"      -W              use write I/O (please read manpage)\n"
+			"      -T              include ISO 8601 formatted timestamp\n"
 			"      -k              keep and reuse temporary file (ioping.tmp)\n"
 			"      -q              suppress human-readable output\n"
 			"      -h              display this message and exit\n"
@@ -455,6 +456,7 @@ void *buf;
 
 int quiet = 0;
 int batch_mode = 0;
+int report_time = 0;
 int direct = 0;
 int cached = 0;
 int randomize = 1;
@@ -495,7 +497,7 @@ void parse_options(int argc, char **argv)
 		exit(1);
 	}
 
-	while ((opt = getopt(argc, argv, "hvkALRDCWBqi:t:w:s:S:c:o:p:P:")) != -1) {
+	while ((opt = getopt(argc, argv, "hvkALRDCWBTqi:t:w:s:S:c:o:p:P:")) != -1) {
 		switch (opt) {
 			case 'h':
 				usage();
@@ -555,6 +557,9 @@ void parse_options(int argc, char **argv)
 				break;
 			case 'q':
 				quiet = 1;
+				break;
+			case 'T':
+				report_time = 1;
 				break;
 			case 'B':
 				quiet = 1;
@@ -999,6 +1004,21 @@ static void random_memory(void *buf, size_t len)
 	}
 }
 
+static char * timestamp(void) {
+	struct tm *tm;
+	time_t tnow;
+	char string[64];
+	char * fmt = "%Y-%m-%dT%H:%M:%S";
+
+	tnow = time(NULL);
+	tm = localtime(&tnow);
+	static char stampstr[64];
+
+  strftime(string, 64, fmt, tm);
+  sprintf(stampstr, "%s+%.1ld:00", string, timezone/(60*60));
+	return(stampstr);
+}
+
 int main (int argc, char **argv)
 {
 	ssize_t ret_size;
@@ -1229,7 +1249,12 @@ skip_preparation:
 					path, fstype, device);
 			if (device_size)
 				print_size(device_size);
-			printf("): request=%lu time=", (long unsigned)request);
+			if (report_time) {
+				printf("): timestamp=%s request=%lld time=",
+					timestamp(), request);
+			} else {
+				printf("): request=%lu time=", (long unsigned)request);
+			}
 			print_time(this_time);
 			if (this_time < min_valid_time)
 				printf(" (cache hit)");
@@ -1238,6 +1263,18 @@ skip_preparation:
 
 		if ((period_request && (part_request >= period_request)) ||
 		    (period_time && (time_next >= period_deadline))) {
+
+			part_avg = part_sum / part_request;
+			part_mdev = sqrt(part_sum2 / part_request - part_avg * part_avg);
+			if (report_time) { // Add a prefix to non-timestamped results.
+				printf("%s ", timestamp());
+			}
+			printf("%lld %.0f %.0f %.0f %.0f %.0f %.0f %.0f\n",
+					part_request, part_sum,
+					1000000. * part_request / part_sum,
+					1000000. * part_request * size / part_sum,
+					part_min, part_avg,
+					part_max, part_mdev);
 
 			time_sum += part_sum;
 			time_sum2 += part_sum2;
@@ -1316,6 +1353,7 @@ skip_preparation:
 	}
 
 	if (batch_mode) {
+		if (report_time) printf("%s ", timestamp());
 		printf("%lu %.0f %.0f %.0f %.0f %.0f %.0f %.0f\n",
 				(unsigned long)total_valid, time_sum,
 				1. * NSEC_PER_SEC *
