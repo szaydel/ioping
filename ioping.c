@@ -301,7 +301,8 @@ void usage(void)
 			"      -L              use sequential operations\n"
 			"      -W              use write I/O (please read manpage)\n"
 			"      -T              include ISO 8601 formatted timestamp\n"
-			"      -k              keep and reuse temporary file (ioping.tmp)\n"
+			"      -d              produce comma delimited output\n"
+            "      -k              keep and reuse temporary file (ioping.tmp)\n"
 			"      -q              suppress human-readable output\n"
 			"      -h              display this message and exit\n"
 			"      -v              display version and exit\n"
@@ -456,6 +457,7 @@ void *buf;
 
 int quiet = 0;
 int batch_mode = 0;
+int delimited_mode = 0;
 int report_time = 0;
 int direct = 0;
 int cached = 0;
@@ -497,7 +499,7 @@ void parse_options(int argc, char **argv)
 		exit(1);
 	}
 
-	while ((opt = getopt(argc, argv, "hvkALRDCWBTqi:t:w:s:S:c:o:p:P:")) != -1) {
+	while ((opt = getopt(argc, argv, "hvkALRDCWBTqdi:t:w:s:S:c:o:p:P:")) != -1) {
 		switch (opt) {
 			case 'h':
 				usage();
@@ -529,6 +531,9 @@ void parse_options(int argc, char **argv)
 			case 'W':
 				write_test++;
 				break;
+            case 'd':
+                delimited_mode = 1;
+                break;
 			case 'i':
 				interval = parse_time(optarg);
 				custom_interval = 1;
@@ -1019,12 +1024,21 @@ static char * timestamp(void) {
 	return(stampstr);
 }
 
+static char *make_csv(char *buf, char *ts, char *path, char *fstype,
+                      char *device, ssize_t bytesize,
+                      long unsigned request, long long time,
+                      double avlat) {
+    sprintf(buf, "%s,%s,%s,%s,%ld,%lu,%lld,%.3f\n",
+            ts, path, fstype, device, bytesize, request, time / 1000, avlat);
+    return buf;
+}
+
 int main (int argc, char **argv)
 {
 	ssize_t ret_size;
 	struct stat st;
 	int ret;
-
+    char *csv_result = malloc(sizeof(char) * 1024);
 	long long request, part_request;
 	long long total_valid, part_valid;
 	long long this_time;
@@ -1242,23 +1256,28 @@ skip_preparation:
 			if (this_time > part_max)
 				part_max = this_time;
 		}
-
+        
+        if (delimited_mode) {
+            printf("%s", make_csv(csv_result, timestamp(), path, fstype,
+                                  device, ret_size, request,
+                                  this_time, (part_sum / part_request) / 1000));
+        }
 		if (!quiet) {
-			print_size(ret_size);
-			printf(" %s %s (%s %s", write_test ? "to" : "from",
+			if(!delimited_mode) print_size(ret_size);
+			!delimited_mode && printf(" %s %s (%s %s", write_test ? "to" : "from",
 					path, fstype, device);
-			if (device_size)
+			if (device_size && !delimited_mode)
 				print_size(device_size);
-			if (report_time) {
-				printf("): timestamp=%s request=%lld time=",
+			if (report_time && !delimited_mode) {
+				!delimited_mode && printf("): timestamp=%s request=%lld time=",
 					timestamp(), request);
 			} else {
-				printf("): request=%lu time=", (long unsigned)request);
+				!delimited_mode && printf("): request=%lu time=", (long unsigned)request);
 			}
-			print_time(this_time);
+			if (!delimited_mode) print_time(this_time);
 			if (this_time < min_valid_time)
 				printf(" (cache hit)");
-			printf("\n");
+			if (!delimited_mode) printf("\n");
 		}
 
 		if ((period_request && (part_request >= period_request)) ||
@@ -1266,15 +1285,16 @@ skip_preparation:
 
 			part_avg = part_sum / part_request;
 			part_mdev = sqrt(part_sum2 / part_request - part_avg * part_avg);
-			if (report_time) { // Add a prefix to non-timestamped results.
-				printf("%s ", timestamp());
-			}
-			printf("%lld %.0f %.0f %.0f %.0f %.0f %.0f %.0f\n",
-					part_request, part_sum,
-					1000000. * part_request / part_sum,
-					1000000. * part_request * size / part_sum,
-					part_min, part_avg,
-					part_max, part_mdev);
+            
+            if (report_time) { // Add a prefix to non-timestamped results.
+                printf("%s ", timestamp());
+            }
+            !delimited_mode && printf("%lld %.0f %.0f %.0f %.0f %.0f %.0f %.0f\n",
+                   part_request, part_sum,
+                   1000000. * part_request / part_sum,
+                   1000000. * part_request * size / part_sum,
+                   part_min, part_avg,
+                   part_max, part_mdev);
 
 			time_sum += part_sum;
 			time_sum2 += part_sum2;
